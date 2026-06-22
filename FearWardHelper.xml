@@ -1,0 +1,183 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.blizzard.com/wow/ui/
+..\FrameXML\UI.xsd">
+
+	<!-- Cooldown tracker frame. Lists every priest in the group with their Fear
+	     Ward cooldown state. Also the addon's "engine": it owns the always-on
+	     events and the OnUpdate driver. Moveable (drag anywhere); position/scale/
+	     lock persist in FearWardHelperDB.cdFrame. Rows are built in Lua. The
+	     backdrop is applied in OnLoad (XML <Backdrop> color handling is fiddly on
+	     1.12, so we SetBackdrop in code). -->
+	<Frame name="FearWardHelper_CD" parent="UIParent" movable="true" enableMouse="true">
+		<Size>
+			<AbsDimension x="150" y="60" />
+		</Size>
+		<Anchors>
+			<Anchor point="CENTER">
+				<Offset>
+					<AbsDimension x="-220" y="120" />
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Layers>
+			<Layer level="OVERLAY">
+				<FontString name="$parentHeader" inherits="GameFontNormalSmall" text="Fear Ward CDs">
+					<Anchors>
+						<Anchor point="TOP">
+							<Offset>
+								<AbsDimension x="0" y="-5" />
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+		<Frames>
+			<!-- Bottom-right width grip, only interactive while unlocked. Resizes
+			     width only (StartSizing "RIGHT"); height auto-fits the rows. Bundled
+			     grip glyph, since this client lacks Blizzard's chat SizeGrabber.
+			     Anchored at the corner (not RIGHT-centre) so it clears the rows; its
+			     frame level is raised in Lua so the clickable watch rows don't eat
+			     the grip's mouse. -->
+			<Button name="$parentResizeGrip" hidden="true">
+				<Size>
+					<AbsDimension x="16" y="16" />
+				</Size>
+				<Anchors>
+					<Anchor point="BOTTOMRIGHT" />
+				</Anchors>
+				<Scripts>
+					<OnMouseDown>
+						FearWardHelper_StartSizing()
+					</OnMouseDown>
+					<OnMouseUp>
+						FearWardHelper_StopSizing()
+					</OnMouseUp>
+				</Scripts>
+				<NormalTexture file="Interface\AddOns\FearWardHelper\textures\ResizeGrip" />
+				<HighlightTexture file="Interface\AddOns\FearWardHelper\textures\ResizeGrip" alphaMode="ADD" />
+			</Button>
+		</Frames>
+		<Scripts>
+			<OnLoad>
+				FearWardHelper_OnLoad()
+			</OnLoad>
+			<OnEvent>
+				FearWardHelper_OnEvent()
+			</OnEvent>
+			<OnDragStart>
+				FearWardHelper_OnDragStart()
+			</OnDragStart>
+			<OnDragStop>
+				FearWardHelper_OnDragStop()
+			</OnDragStop>
+		</Scripts>
+	</Frame>
+
+	<!-- Watch-list frame. Lists watched players currently in the group, their
+	     Fear Ward buff state, and acts as a cast button (click a row to ward that
+	     player). Position/scale/lock persist in FearWardHelperDB.watchFrame. -->
+	<Frame name="FearWardHelper_Watch" parent="UIParent" movable="true" enableMouse="true">
+		<Size>
+			<AbsDimension x="170" y="60" />
+		</Size>
+		<Anchors>
+			<Anchor point="CENTER">
+				<Offset>
+					<AbsDimension x="220" y="120" />
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Layers>
+			<Layer level="OVERLAY">
+				<FontString name="$parentHeader" inherits="GameFontNormalSmall" text="Fear Ward Targets">
+					<Anchors>
+						<Anchor point="TOP">
+							<Offset>
+								<AbsDimension x="0" y="-5" />
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+		<Frames>
+			<!-- Bottom-right width grip, only interactive while unlocked. Corner-
+			     anchored (not RIGHT-centre) and raised above the clickable rows in
+			     Lua so the grip, not a watch row, receives the resize drag. -->
+			<Button name="$parentResizeGrip" hidden="true">
+				<Size>
+					<AbsDimension x="16" y="16" />
+				</Size>
+				<Anchors>
+					<Anchor point="BOTTOMRIGHT" />
+				</Anchors>
+				<Scripts>
+					<OnMouseDown>
+						FearWardHelper_StartSizing()
+					</OnMouseDown>
+					<OnMouseUp>
+						FearWardHelper_StopSizing()
+					</OnMouseUp>
+				</Scripts>
+				<NormalTexture file="Interface\AddOns\FearWardHelper\textures\ResizeGrip" />
+				<HighlightTexture file="Interface\AddOns\FearWardHelper\textures\ResizeGrip" alphaMode="ADD" />
+			</Button>
+		</Frames>
+		<Scripts>
+			<OnLoad>
+				FearWardHelper_Watch_OnLoad()
+			</OnLoad>
+			<OnDragStart>
+				FearWardHelper_OnDragStart()
+			</OnDragStart>
+			<OnDragStop>
+				FearWardHelper_OnDragStop()
+			</OnDragStop>
+		</Scripts>
+	</Frame>
+
+	<!-- Notification area. A floating list of transient messages (Fear Ward casts +
+	     tracked-target losses) that fade out after a configurable delay. Moveable +
+	     anchorable like the trackers but with NO resize grip: its "size" is the
+	     notification font size (FearWardHelperDB.notifyFontSize). Shown for its whole
+	     life; while locked + empty it is fully transparent (applyBackdropAlpha), with
+	     a faint grab box + the $parentHandle label only while unlocked, so it can be
+	     positioned at any time. Notification lines are font strings built in Lua. -->
+	<Frame name="FearWardHelper_Notify" parent="UIParent" movable="true" enableMouse="true">
+		<Size>
+			<AbsDimension x="240" y="40" />
+		</Size>
+		<Anchors>
+			<Anchor point="CENTER">
+				<Offset>
+					<AbsDimension x="0" y="150" />
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Layers>
+			<Layer level="OVERLAY">
+				<FontString name="$parentHandle" inherits="GameFontNormalSmall" text="Fear Ward notifications">
+					<Anchors>
+						<Anchor point="TOP">
+							<Offset>
+								<AbsDimension x="0" y="-4" />
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</FontString>
+			</Layer>
+		</Layers>
+		<Scripts>
+			<OnLoad>
+				FearWardHelper_Notify_OnLoad()
+			</OnLoad>
+			<OnDragStart>
+				FearWardHelper_OnDragStart()
+			</OnDragStart>
+			<OnDragStop>
+				FearWardHelper_OnDragStop()
+			</OnDragStop>
+		</Scripts>
+	</Frame>
+
+</Ui>

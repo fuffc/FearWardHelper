@@ -1,0 +1,9 @@
+## Interface: 11501
+## Title: FearWardHelper
+## Notes: Tracks priests' Fear Ward cooldowns, who is warded, and helps cast it on watched players
+## Author: Fuff
+## Version: 0.1.0
+## SavedVariables: FearWardHelperDB
+
+FearWardHelper.lua
+FearWardHelper.xml
