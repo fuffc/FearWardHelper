@@ -20,7 +20,7 @@
 		</Anchors>
 		<Layers>
 			<Layer level="OVERLAY">
-				<FontString name="$parentHeader" inherits="GameFontNormalSmall" text="Fear Ward CDs">
+				<FontString name="$parentHeader" inherits="GameFontNormalSmall" text="Fear Ward">
 					<Anchors>
 						<Anchor point="TOP">
 							<Offset>
@@ -64,69 +64,6 @@
 			<OnEvent>
 				FearWardHelper_OnEvent()
 			</OnEvent>
-			<OnDragStart>
-				FearWardHelper_OnDragStart()
-			</OnDragStart>
-			<OnDragStop>
-				FearWardHelper_OnDragStop()
-			</OnDragStop>
-		</Scripts>
-	</Frame>
-
-	<!-- Watch-list frame. Lists watched players currently in the group, their
-	     Fear Ward buff state, and acts as a cast button (click a row to ward that
-	     player). Position/scale/lock persist in FearWardHelperDB.watchFrame. -->
-	<Frame name="FearWardHelper_Watch" parent="UIParent" movable="true" enableMouse="true">
-		<Size>
-			<AbsDimension x="170" y="60" />
-		</Size>
-		<Anchors>
-			<Anchor point="CENTER">
-				<Offset>
-					<AbsDimension x="220" y="120" />
-				</Offset>
-			</Anchor>
-		</Anchors>
-		<Layers>
-			<Layer level="OVERLAY">
-				<FontString name="$parentHeader" inherits="GameFontNormalSmall" text="Fear Ward Targets">
-					<Anchors>
-						<Anchor point="TOP">
-							<Offset>
-								<AbsDimension x="0" y="-5" />
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-			</Layer>
-		</Layers>
-		<Frames>
-			<!-- Bottom-right width grip, only interactive while unlocked. Corner-
-			     anchored (not RIGHT-centre) and raised above the clickable rows in
-			     Lua so the grip, not a watch row, receives the resize drag. -->
-			<Button name="$parentResizeGrip" hidden="true">
-				<Size>
-					<AbsDimension x="16" y="16" />
-				</Size>
-				<Anchors>
-					<Anchor point="BOTTOMRIGHT" />
-				</Anchors>
-				<Scripts>
-					<OnMouseDown>
-						FearWardHelper_StartSizing()
-					</OnMouseDown>
-					<OnMouseUp>
-						FearWardHelper_StopSizing()
-					</OnMouseUp>
-				</Scripts>
-				<NormalTexture file="Interface\AddOns\FearWardHelper\textures\ResizeGrip" />
-				<HighlightTexture file="Interface\AddOns\FearWardHelper\textures\ResizeGrip" alphaMode="ADD" />
-			</Button>
-		</Frames>
-		<Scripts>
-			<OnLoad>
-				FearWardHelper_Watch_OnLoad()
-			</OnLoad>
 			<OnDragStart>
 				FearWardHelper_OnDragStart()
 			</OnDragStart>

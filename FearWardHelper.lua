@@ -40,9 +40,9 @@ the translated name. The one place a name is needed (CastSpellByName) uses the
 localized name from SpellInfo(6346); without SuperWoW that comes from the
 spellbook (matched by the fixed icon) instead, never a hardcoded English string.
 
-Config via /fw (add/remove/list/up/down watch targets, merge/split, lock/unlock,
-scale, reset) or the `/fw config` panel, which drives the same setters. Layout,
-scale, lock, the merged-frame toggle and the watch-list live in FearWardHelperDB.
+Config via `/fw` / `/fw config` (opens the options panel) or `/fw lock` / `/fw
+unlock`; everything else lives in that panel, which drives the same setters.
+Layout, scale, lock and the watch-list live in FearWardHelperDB.
 ----------------------------------------------------------------------------- ]]
 
 local FEAR_WARD_ID       = 6346
@@ -102,8 +102,7 @@ local DB_DEFAULTS = {
 	wards        = {},      -- name -> time() epoch the buff expires (persisted timers)
 	showWhenSolo = false,   -- keep the frames up even when not grouped
 	hidden       = false,   -- master toggle: hide the addon entirely regardless of group/solo
-	merged       = true,    -- show CDs + targets in one frame (the CD frame) instead of two
-	bgOpacity    = 0.8,     -- frame background alpha (0-1), shared by both tracker frames
+	bgOpacity    = 0.8,     -- tracker frame background alpha (0-1)
 	wardNextSweep = false,  -- WardNext: when all tracked are warded, ward any unwarded group member
 	lowDuration  = 60,      -- seconds: a ward with less than this left shows orange + becomes a
 	                        -- WardNext priority (top-off early); 0 disables (only unwarded count)
@@ -119,8 +118,7 @@ local DB_DEFAULTS = {
 	notifyCDReadyGroup   = false,  -- also announce when other group priests' Fear Ward is ready
 	notifyDuration       = 5,      -- seconds a notification stays before it fades out
 	notifyFontSize       = 14,     -- notification line font size ("resize" = font size)
-	cdFrame      = { point = "CENTER", x = -220, y = 120, scale = 1.0, width = 150, locked = false },
-	watchFrame   = { point = "CENTER", x =  220, y = 120, scale = 1.0, width = 170, locked = false },
+	cdFrame      = { point = "CENTER", x = -220, y = 120, scale = 1.0, width = 170, locked = false },
 	notifyFrame  = { point = "CENTER", x =    0, y = 150, scale = 1.0, width = 240, locked = false },
 }
 
@@ -128,7 +126,7 @@ local DB_DEFAULTS = {
 local HEADER_H  = 18  -- space the title occupies at the top
 local ROW_H     = 14  -- per-row height
 local PAD       = 6   -- inner padding
-local SUBHEAD_H = 16  -- the "Targets" sub-section header in merged mode
+local SUBHEAD_H = 16  -- the "Targets" sub-section header above the watch rows
 
 ----------------------------------------------------------------------------
 -- Live state (rebuilt from the roster; not persisted)
@@ -1130,8 +1128,7 @@ end
 
 -- Create a row widget (a Button for the clickable watch list, a Frame otherwise)
 -- with a left "name" and right "status" font string. Positioning is deferred to
--- placeRow so a row can be re-anchored (and re-parented) when the layout changes
--- -- the merged mode hangs the watch rows off the CD frame instead of the watch frame.
+-- placeRow so a row can be re-anchored each rebuild.
 local function makeRow(parent, asButton)
 	local f = CreateFrame(asButton and "Button" or "Frame", nil, parent)
 	f:SetHeight(ROW_H)
@@ -1174,8 +1171,7 @@ local function makeRow(parent, asButton)
 end
 
 -- Anchor a row inside `parent` at vertical offset `yOff` pixels below the top.
--- Re-parents if needed (merged mode moves watch rows into the CD frame), so the
--- same pooled row works in either layout.
+-- Re-parents if needed, so a pooled row can be positioned under any parent.
 local function placeRow(f, parent, yOff)
 	if f:GetParent() ~= parent then f:SetParent(parent) end
 	f:ClearAllPoints()
@@ -1189,12 +1185,12 @@ local function getCDRow(i)
 end
 
 local function getWatchRow(i)
-	if not watchRows[i] then watchRows[i] = makeRow(FearWardHelper_Watch, true) end
+	if not watchRows[i] then watchRows[i] = makeRow(FearWardHelper_CD, true) end
 	return watchRows[i]
 end
 
--- The "Targets" sub-section header + divider line, drawn inside the CD frame in
--- merged mode so one container frames both lists. Created lazily on first merge.
+-- The "Targets" sub-section header + divider line, drawn inside the CD frame to
+-- separate the watch rows from the cooldown rows. Created lazily on first use.
 local function getTargetHeader()
 	local cf = FearWardHelper_CD
 	if not cf.targetHeader then
@@ -1218,16 +1214,11 @@ local function sizeFrame(frame, dbKey, rows)
 end
 
 -- Rebuild which rows exist and their (static) names. Called on roster / watch-list
--- / layout-mode changes; the per-tick status text is set by refreshDisplay.
---
--- Split mode: the CD list lives in FearWardHelper_CD and the watch list in
--- FearWardHelper_Watch -- two independent frames. Merged mode (the default) stacks both inside
--- the CD frame (CD rows, a "Targets" sub-header + divider, then the watch rows) and
--- hides the watch frame; the watch rows are re-parented into the CD frame.
+-- changes; the per-tick status text is set by refreshDisplay. Both lists live in
+-- the one CD frame: the cooldown rows, then (when any target is present) a "Targets"
+-- sub-header + divider, then the watch rows.
 local function rebuildRows()
-	local merged = FearWardHelperDB.merged
-
-	-- Cooldown rows: one per priest in the group, always in the CD frame.
+	-- Cooldown rows: one per priest in the group.
 	local nP = table.getn(priests)
 	for i = 1, nP do
 		local row = getCDRow(i)
@@ -1247,31 +1238,22 @@ local function rebuildRows()
 		if visibleWatchTarget(wl[i]) then visibleTargets = visibleTargets + 1 end
 	end
 
-	-- Decide where the watch section lives and where it starts vertically.
-	local wParent, wYStart
-	if merged then
-		wParent = FearWardHelper_CD
-		local ySub = HEADER_H + nP * ROW_H
-		if visibleTargets > 0 then
-			local gap = 4
-			local header, divider = getTargetHeader()
-			divider:ClearAllPoints()
-			divider:SetPoint("TOPLEFT", FearWardHelper_CD, "TOPLEFT", PAD, -(ySub + gap))
-			divider:SetPoint("RIGHT", FearWardHelper_CD, "RIGHT", -PAD, 0)
-			header:ClearAllPoints()
-			header:SetPoint("TOPLEFT", FearWardHelper_CD, "TOPLEFT", PAD, -(ySub + gap + 4))
-			header:Show(); divider:Show()
-			wYStart = ySub + gap + SUBHEAD_H
-		else
-			wYStart = ySub
-			if FearWardHelper_CD.targetHeader then
-				FearWardHelper_CD.targetHeader:Hide()
-				FearWardHelper_CD.targetDivider:Hide()
-			end
-		end
+	-- The watch section stacks under the cooldown rows. Its "Targets" sub-header +
+	-- divider only show when at least one target is present.
+	local ySub = HEADER_H + nP * ROW_H
+	local wYStart
+	if visibleTargets > 0 then
+		local gap = 4
+		local header, divider = getTargetHeader()
+		divider:ClearAllPoints()
+		divider:SetPoint("TOPLEFT", FearWardHelper_CD, "TOPLEFT", PAD, -(ySub + gap))
+		divider:SetPoint("RIGHT", FearWardHelper_CD, "RIGHT", -PAD, 0)
+		header:ClearAllPoints()
+		header:SetPoint("TOPLEFT", FearWardHelper_CD, "TOPLEFT", PAD, -(ySub + gap + 4))
+		header:Show(); divider:Show()
+		wYStart = ySub + gap + SUBHEAD_H
 	else
-		wParent = FearWardHelper_Watch
-		wYStart = HEADER_H
+		wYStart = ySub
 		if FearWardHelper_CD.targetHeader then
 			FearWardHelper_CD.targetHeader:Hide()
 			FearWardHelper_CD.targetDivider:Hide()
@@ -1289,38 +1271,23 @@ local function rebuildRows()
 			row.pname = actual
 			row.nameFS:SetText(actual)
 			row.nameFS:SetTextColor(classColor(classByName[actual]))
-			placeRow(row, wParent, wYStart + (w - 1) * ROW_H)
+			placeRow(row, FearWardHelper_CD, wYStart + (w - 1) * ROW_H)
 			row:Show()
 		end
 	end
 	for i = w + 1, table.getn(watchRows) do watchRows[i]:Hide() end
 	watchVisible = w
 
-	-- Size the container(s). In merged mode the CD frame spans both sections and
-	-- the watch frame is hidden; in split mode each frame fits its own rows.
-	local hdr = getglobal("FearWardHelper_CDHeader")
-	if merged then
-		if visibleTargets > 0 then
-			FearWardHelper_CD:SetWidth(FearWardHelperDB.cdFrame.width)
-			FearWardHelper_CD:SetHeight(wYStart + w * ROW_H + PAD)
-		else
-			sizeFrame(FearWardHelper_CD, "cdFrame", nP)
-		end
-		FearWardHelper_Watch:Hide()
-		if hdr then hdr:SetText("Fear Ward") end
+	-- Size the CD frame to span both sections (or just the priest rows when no
+	-- target is present).
+	if visibleTargets > 0 then
+		FearWardHelper_CD:SetWidth(FearWardHelperDB.cdFrame.width)
+		FearWardHelper_CD:SetHeight(wYStart + w * ROW_H + PAD)
 	else
 		sizeFrame(FearWardHelper_CD, "cdFrame", nP)
-		if visibleTargets > 0 then
-			sizeFrame(FearWardHelper_Watch, "watchFrame", w)
-			if active then FearWardHelper_Watch:Show() end
-		else
-			FearWardHelper_Watch:Hide()
-		end
-		if hdr then hdr:SetText("Fear Ward CDs") end
 	end
 	-- Reposition after sizing so non-TOPLEFT anchors stay correct.
 	applyPosition(FearWardHelper_CD)
-	if not merged then applyPosition(FearWardHelper_Watch) end
 end
 
 -- Exact remaining seconds of Fear Ward on the *player*, or nil if absent. Unlike
@@ -1514,13 +1481,12 @@ local function setLocked(frame, locked)
 	if grip then if locked then grip:Hide() else grip:Show() end end
 end
 
--- Set the shared background opacity (0-1) and repaint both frames.
+-- Set the tracker background opacity (0-1) and repaint the frame.
 local function setBgOpacity(n)
 	if not n then return end
 	if n < 0 then n = 0 elseif n > 1 then n = 1 end
 	FearWardHelperDB.bgOpacity = n
 	applyBackdropAlpha(FearWardHelper_CD)
-	applyBackdropAlpha(FearWardHelper_Watch)
 	if refreshConfig then refreshConfig() end
 end
 
@@ -1624,9 +1590,6 @@ local function setActive(shouldBeActive)
 		FearWardHelper_CD:RegisterEvent("CHAT_MSG_ADDON")
 		FearWardHelper_CD:SetScript("OnUpdate", FearWardHelper_OnUpdate)
 		FearWardHelper_CD:Show()
-		-- The watch frame is its own window in split mode; in merged mode the watch
-		-- rows live in the CD frame and this frame stays hidden (rebuildRows enforces).
-		if not FearWardHelperDB.merged then FearWardHelper_Watch:Show() end
 	else
 		FearWardHelper_CD:UnregisterEvent("UNIT_CASTEVENT")
 		FearWardHelper_CD:UnregisterEvent("BUFF_ADDED_SELF")
@@ -1636,7 +1599,6 @@ local function setActive(shouldBeActive)
 		FearWardHelper_CD:UnregisterEvent("CHAT_MSG_ADDON")
 		FearWardHelper_CD:SetScript("OnUpdate", nil)
 		FearWardHelper_CD:Hide()
-		FearWardHelper_Watch:Hide()
 		-- Drop transient tracking so a re-group starts clean. Ward *timers* are not
 		-- dropped: wardExpiresAt is the persisted table, and a re-group re-confirms
 		-- presence by scan -- clearing here would throw away still-valid countdowns.
@@ -1724,11 +1686,6 @@ function FearWardHelper_OnLoad()
 	this:Hide()
 end
 
-function FearWardHelper_Watch_OnLoad()
-	setupTrackerFrame(this, "watchFrame")
-	this:Hide()
-end
-
 function FearWardHelper_Notify_OnLoad()
 	setupTrackerFrame(this, "notifyFrame")
 	-- Drive notification ageing/fade independently of the trackers' active state, so
@@ -1752,7 +1709,6 @@ function FearWardHelper_OnEvent()
 		end
 		wardExpiresAt = FearWardHelperDB.wards
 		applyFrame(FearWardHelper_CD)
-		applyFrame(FearWardHelper_Watch)
 		applyFrame(FearWardHelper_Notify)
 
 	elseif event == "PLAYER_ENTERING_WORLD" then
@@ -1866,16 +1822,6 @@ local function removeWatch(name)
 end
 
 -- Move a watched name up (dir -1) or down (dir +1) the priority list.
-local function moveWatch(name, dir)
-	local wl = FearWardHelperDB.watchList
-	local i = findWatchIndex(name)
-	if not i then return end
-	local j = i + dir
-	if j < 1 or j > table.getn(wl) then return end
-	wl[i], wl[j] = wl[j], wl[i]
-	refreshIfActive()
-end
-
 -- Splice-based reorder (the config list's drag-to-reorder and its arrow
 -- buttons; see LibWidgets.lua's spec.reorder for the exact "before"
 -- boundary convention, mirroring Quartermaster's QM.reorderDesired).
@@ -1892,42 +1838,18 @@ local function reorderWatch(from, before)
 	refreshIfActive()
 end
 
-local function listWatch()
-	local wl = FearWardHelperDB.watchList
-	local n = table.getn(wl)
-	if n == 0 then
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: watch-list is empty (/fw add <name>).")
-		return
-	end
-	DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper watch-list (priority order):")
-	for i = 1, n do
-		local state = watchState(wl[i])
-		local note
-		if state == "off" then note = " - disabled"
-		elseif state == "hidden" then note = " - hidden"
-		elseif presentLower[string.lower(wl[i])] then note = " - in group"
-		else note = "" end
-		DEFAULT_CHAT_FRAME:AddMessage("  " .. i .. ". " .. wl[i] .. note)
-	end
-end
-
 local function setScale(n, silent)
 	if not n then return end
 	if n < 0.5 then n = 0.5 elseif n > 2.0 then n = 2.0 end
 	local oldScale = FearWardHelperDB.cdFrame.scale or 1
 	FearWardHelperDB.cdFrame.scale = n
-	FearWardHelperDB.watchFrame.scale = n
 	if oldScale ~= n then
 		local ratio = oldScale / n
 		local cd = FearWardHelperDB.cdFrame
 		cd.x = cd.x * ratio
 		cd.y = cd.y * ratio
-		local wf = FearWardHelperDB.watchFrame
-		wf.x = wf.x * ratio
-		wf.y = wf.y * ratio
 	end
 	applyFrame(FearWardHelper_CD)
-	applyFrame(FearWardHelper_Watch)
 	if not silent then
 		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: scale = " .. n .. ".")
 	end
@@ -1936,13 +1858,12 @@ end
 
 local function lockAll(locked)
 	setLocked(FearWardHelper_CD, locked)
-	setLocked(FearWardHelper_Watch, locked)
 	setLocked(FearWardHelper_Notify, locked)
 	DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: frames " .. (locked and "locked." or "unlocked (drag to move)."))
 	if refreshConfig then refreshConfig() end
 end
 
--- Reset both frames' layout to defaults; the watch-list is left untouched.
+-- Reset the frames' layout to defaults; the watch-list is left untouched.
 local function resetFrame(dbKey, frame)
 	for k, v in pairs(DB_DEFAULTS[dbKey]) do FearWardHelperDB[dbKey][k] = v end
 	applyFrame(frame)
@@ -1950,7 +1871,6 @@ end
 
 local function resetLayout()
 	resetFrame("cdFrame", FearWardHelper_CD)
-	resetFrame("watchFrame", FearWardHelper_Watch)
 	resetFrame("notifyFrame", FearWardHelper_Notify)
 	layoutNotifications()   -- notify anchor (alignment/growth) may have changed
 	if active then rebuildRows() end
@@ -2016,19 +1936,6 @@ local ANCHOR_POINTS = {
 	"BOTTOMLEFT", "BOTTOM", "BOTTOMRIGHT",
 }
 
--- Toggle the single-frame (merged) layout. In merged mode both lists live in the
--- CD frame (see rebuildRows); the watch frame is hidden and reuses no extra DB.
-local function setMerged(on)
-	on = on and true or false
-	if FearWardHelperDB.merged == on then return end
-	FearWardHelperDB.merged = on
-	applyFrame(FearWardHelper_CD)
-	applyFrame(FearWardHelper_Watch)
-	if active then rebuildRows(); refreshDisplay()
-	else FearWardHelper_Watch:Hide() end
-	if refreshConfig then refreshConfig() end
-end
-
 -- Keep the frames up while solo; flips activation immediately via the roster pass.
 local function setShowWhenSolo(on)
 	FearWardHelperDB.showWhenSolo = on and true or false
@@ -2041,15 +1948,6 @@ end
 local function setHidden(on)
 	FearWardHelperDB.hidden = on and true or false
 	rebuildRoster()
-	if refreshConfig then refreshConfig() end
-end
-
--- WardNext sweep: once every tracked target (shown + hidden) is warded, let WardNext
--- ward any unwarded, reachable group member not on the watch-list (see WardNext).
-local function setWardNextSweep(on)
-	FearWardHelperDB.wardNextSweep = on and true or false
-	DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: WardNext untracked sweep "
-		.. (FearWardHelperDB.wardNextSweep and "on." or "off."))
 	if refreshConfig then refreshConfig() end
 end
 
@@ -2128,7 +2026,7 @@ end
 
 -- Build one frame's position controls into a single row: name label + anchor
 -- dropdown + X/Y edit boxes. The caller positions the row vertically (see
--- p.layoutPos) so split mode can grow the panel without reserving dead space.
+-- p.layoutPos).
 local POS_ROW_H = 24
 local function cfgPosRow(parent, getFrame)
 	local row = CreateFrame("Frame", nil, parent)
@@ -2170,7 +2068,6 @@ refreshConfig = function()
 	if not p or not p:IsShown() then return end
 	local db = FearWardHelperDB
 
-	p.mergedCheck:SetChecked(db.merged)
 	p.lockCheck:SetChecked(db.cdFrame.locked)
 	p.soloCheck:SetChecked(db.showWhenSolo)
 	p.hideCheck:SetChecked(db.hidden)
@@ -2202,23 +2099,16 @@ refreshConfig = function()
 	-- Watch-list editor (scrollable).
 	p.updateWatchList()
 
-	-- Frame-position rows: CD row always; watch row only in split mode; notify always.
-	-- layoutPos re-stacks them so split mode grows the panel rather than leaving a gap.
-	p.cdPos.label:SetText(db.merged and "Frame" or "CD frame")
+	-- Frame-position rows: the tracker frame and the notify frame.
+	p.cdPos.label:SetText("Frame")
 	p.cdPos.anchor.setValue(db.cdFrame.point)
 	p.cdPos.x:SetText(string.format("%.0f", db.cdFrame.x))
 	p.cdPos.y:SetText(string.format("%.0f", db.cdFrame.y))
-	if not db.merged then
-		p.watchPos.label:SetText("Target frame")
-		p.watchPos.anchor.setValue(db.watchFrame.point)
-		p.watchPos.x:SetText(string.format("%.0f", db.watchFrame.x))
-		p.watchPos.y:SetText(string.format("%.0f", db.watchFrame.y))
-	end
 	p.notifyPos.label:SetText("Notify frame")
 	p.notifyPos.anchor.setValue(db.notifyFrame.point)
 	p.notifyPos.x:SetText(string.format("%.0f", db.notifyFrame.x))
 	p.notifyPos.y:SetText(string.format("%.0f", db.notifyFrame.y))
-	p.layoutPos(db.merged)
+	p.layoutPos()
 end
 
 ----------------------------------------------------------------------------
@@ -2314,9 +2204,9 @@ local ui = {
 	cfgHeader = cfgHeader, cfgCheck = cfgCheck, cfgPosRow = cfgPosRow,
 }
 local act = {
-	addWatch = addWatch, removeWatch = removeWatch, moveWatch = moveWatch,
+	addWatch = addWatch, removeWatch = removeWatch,
 	reorderWatch = reorderWatch,
-	cycleWatchState = cycleWatchState, setMerged = setMerged,
+	cycleWatchState = cycleWatchState,
 	setShowWhenSolo = setShowWhenSolo, setHidden = setHidden, lockAll = lockAll, setNotifyFlag = setNotifyFlag,
 	setScale = setScale, setBgOpacity = setBgOpacity, notifyTest = notifyTest,
 	setNotifyDuration = setNotifyDuration, setNotifyFontSize = setNotifyFontSize,
@@ -2422,22 +2312,20 @@ local function buildConfig()
 
 	-- Toggles (two columns) -------------------------------------------------
 	local togY = rowTop - watchEditor.height - 8
-	p.mergedCheck = ui.cfgCheck(p, "Single combined frame", function(on) act.setMerged(on) end)
-	p.mergedCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL1, togY)
+	p.lockCheck = ui.cfgCheck(p, "Lock frames", function(on) act.lockAll(on) end)
+	p.lockCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL1, togY)
 	p.soloCheck = ui.cfgCheck(p, "Show when solo", function(on) act.setShowWhenSolo(on) end)
 	p.soloCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL2, togY)
-	p.lockCheck = ui.cfgCheck(p, "Lock frames", function(on) act.lockAll(on) end)
-	p.lockCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL1, togY - 24)
 	-- WardNext sweep: ward untracked group members once all tracked are warded. Routed
 	-- through the generic setNotifyFlag (a plain boolean DB write) for brevity.
 	p.sweepCheck = ui.cfgCheck(p, "Allow Ward untracked", function(on) act.setNotifyFlag("wardNextSweep", on) end)
-	p.sweepCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL2, togY - 24)
+	p.sweepCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL1, togY - 24)
 	-- Master hide toggle: keep the addon hidden regardless of group/solo state.
 	p.hideCheck = ui.cfgCheck(p, "Hide addon", function(on) act.setHidden(on) end)
-	p.hideCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL1, togY - 48)
+	p.hideCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL2, togY - 24)
 
-	-- Scale + background opacity sliders (two columns, both frames) ----------
-	local sliderY = togY - 84
+	-- Scale + background opacity sliders (two columns) -----------------------
+	local sliderY = togY - 60
 	p.scaleSlider = LibWidgets.NewSlider(p, {
 		name = "FWH_CfgScale", min = 0.5, max = 2.0, step = 0.1,
 		onChange = function(v) act.setScale(v, true) end,
@@ -2506,17 +2394,15 @@ local function buildConfig()
 	local posHdrY = notifySliderY - 40
 	ui.cfgHeader(p, "Frame position", 16, posHdrY)
 	p.cdPos     = ui.cfgPosRow(p, function() return FearWardHelper_CD end)
-	p.watchPos  = ui.cfgPosRow(p, function() return FearWardHelper_Watch end)
 	p.notifyPos = ui.cfgPosRow(p, function() return FearWardHelper_Notify end)
 
 	local resetBtn = LibWidgets.NewButton(p, { text = "Reset positions", width = 120, height = 22, onClick = function() act.resetLayout() end })
 	p.resetBtn = resetBtn
 
-	-- Stack the position rows from posTop. In merged mode the Target row is hidden
-	-- and its space reclaimed (rows below shift up); then size the panel and pin
-	-- Reset just below the last row so split mode grows the panel instead of gapping.
+	-- Stack the position rows from posTop, then size the panel and pin Reset just
+	-- below the last row.
 	p.posTop = posHdrY - 24
-	p.layoutPos = function(merged)
+	p.layoutPos = function()
 		local y = p.posTop
 		local function place(row)
 			row:ClearAllPoints()
@@ -2526,13 +2412,12 @@ local function buildConfig()
 			y = y - POS_ROW_H
 		end
 		place(p.cdPos)
-		if merged then p.watchPos:Hide() else place(p.watchPos) end
 		place(p.notifyPos)
 		resetBtn:ClearAllPoints()
 		resetBtn:SetPoint("TOP", p, "TOP", 0, y - 8)
 		p:SetHeight(-(y - 8 - 22) + 14)
 	end
-	p.layoutPos(FearWardHelperDB and FearWardHelperDB.merged)
+	p.layoutPos()
 
 	p:Hide()
 end
@@ -2548,116 +2433,26 @@ function FearWardHelper_ToggleConfig()
 end
 
 local function printHelp()
-	DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper commands:")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw config         - open the options panel")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw add <name>     - track a player's Fear Ward")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw remove <name>  - stop tracking a player")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw disable <name> - keep in list but stop tracking")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw hide <name>    - hide from list but keep WardNext priority")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw enable <name>  - show + resume tracking (undo hide/disable)")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw list           - show the watch-list (priority order)")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw up|down <name> - change a player's priority")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw sweep on|off   - WardNext wards untracked once all tracked are warded")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw merge | split  - one combined frame, or two")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw lock | unlock  - lock/unlock both frames")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw hide | unhide  - hide/show the whole addon")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw scale <0.5-2>  - resize both frames")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw low <0-120>    - warn (orange + WardNext) below N seconds left; 0 off")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw reset          - reset frame positions/scale")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw notify cast|loss|low|castfail|cd|groupcd|untracked on|off")
-	DEFAULT_CHAT_FRAME:AddMessage("  /fw notify duration <s> | font <size> | test")
+	DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper commands (everything else is in the panel):")
+	DEFAULT_CHAT_FRAME:AddMessage("  /fw or /fw config  - open the options panel")
+	DEFAULT_CHAT_FRAME:AddMessage("  /fw lock | unlock  - lock/unlock the frames for dragging")
 	DEFAULT_CHAT_FRAME:AddMessage("  macros: /script FearWardHelper_WardNext()  or  FearWardHelper_Ward(\"Name\")")
-end
-
--- /fw notify <sub> [value]: toggle the notification options or push a test line.
-local function notifyCmd(sub, val)
-	local on = (string.lower(val or "") == "on")
-	if sub == "cast" or sub == "apply" then
-		setNotifyFlag("notifyApply", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: cast notifications " .. (on and "on." or "off."))
-	elseif sub == "untracked" then
-		setNotifyFlag("notifyApplyUntracked", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: notifications for untracked players " .. (on and "on." or "off."))
-	elseif sub == "loss" then
-		setNotifyFlag("notifyLoss", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: loss notifications " .. (on and "on." or "off."))
-	elseif sub == "low" or sub == "lowduration" or sub == "lowdur" then
-		setNotifyFlag("notifyLowDuration", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: low-ward notifications " .. (on and "on." or "off."))
-	elseif sub == "castfail" or sub == "fail" then
-		setNotifyFlag("notifyCastFail", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: failed-cast notifications " .. (on and "on." or "off."))
-	elseif sub == "cd" then
-		setNotifyFlag("notifyCDReady", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: own CD-ready notifications " .. (on and "on." or "off."))
-	elseif sub == "groupcd" then
-		setNotifyFlag("notifyCDReadyGroup", on)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: group CD-ready notifications " .. (on and "on." or "off."))
-	elseif sub == "duration" or sub == "dur" then
-		setNotifyDuration(tonumber(val))
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: notifications fade after " .. (FearWardHelperDB.notifyDuration) .. "s.")
-	elseif sub == "font" or sub == "fontsize" then
-		setNotifyFontSize(tonumber(val))
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: notification font size " .. (FearWardHelperDB.notifyFontSize) .. ".")
-	elseif sub == "test" then
-		notifyTest()
-	else
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: /fw notify cast|loss|low|castfail|cd|groupcd|untracked on|off, duration <s>, font <size>, test")
-	end
 end
 
 SLASH_FEARWARDHELPER1 = "/fw"
 SLASH_FEARWARDHELPER2 = "/fearward"
 SlashCmdList["FEARWARDHELPER"] = function(msg)
-	-- Preserve case for names; only the command verb is lowercased.
 	local args = {}
 	for w in string.gfind(msg or "", "%S+") do table.insert(args, w) end
 	local cmd = string.lower(args[1] or "")
 
-	if cmd == "config" or cmd == "options" or cmd == "opt" then
+	-- Bare /fw opens the panel (like Quartermaster); everything else lives there.
+	if cmd == "" or cmd == "config" or cmd == "options" or cmd == "opt" then
 		FearWardHelper_ToggleConfig()
-	elseif cmd == "add" and args[2] then
-		addWatch(args[2])
-	elseif (cmd == "remove" or cmd == "rem" or cmd == "del") and args[2] then
-		removeWatch(args[2])
-	elseif (cmd == "enable" or cmd == "on" or cmd == "show") and args[2] then
-		setWatchState(args[2], "shown")
-	elseif cmd == "hide" and args[2] then
-		setWatchState(args[2], "hidden")
-	elseif cmd == "hide" then
-		setHidden(true)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: addon hidden. Use /fw unhide to bring it back.")
-	elseif cmd == "unhide" or cmd == "reveal" then
-		setHidden(false)
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: addon shown.")
-	elseif (cmd == "disable" or cmd == "off") and args[2] then
-		setWatchState(args[2], "off")
-	elseif cmd == "sweep" or cmd == "wardnext" then
-		setWardNextSweep(string.lower(args[2] or "") == "on")
-	elseif cmd == "list" then
-		listWatch()
-	elseif cmd == "up" and args[2] then
-		moveWatch(args[2], -1)
-	elseif cmd == "down" and args[2] then
-		moveWatch(args[2], 1)
-	elseif cmd == "merge" then
-		setMerged(true)
-	elseif cmd == "split" then
-		setMerged(false)
 	elseif cmd == "lock" then
 		lockAll(true)
 	elseif cmd == "unlock" then
 		lockAll(false)
-	elseif cmd == "scale" and args[2] then
-		setScale(tonumber(args[2]))
-	elseif (cmd == "lowduration" or cmd == "lowdur" or cmd == "low") and args[2] then
-		setLowDuration(tonumber(args[2]))
-		local ld = FearWardHelperDB.lowDuration
-		DEFAULT_CHAT_FRAME:AddMessage("FearWardHelper: low-ward warning " .. (ld > 0 and ("below " .. ld .. "s.") or "disabled."))
-	elseif cmd == "reset" then
-		resetLayout()
-	elseif cmd == "notify" then
-		notifyCmd(string.lower(args[2] or ""), args[3])
 	else
 		printHelp()
 	end

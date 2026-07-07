@@ -7,11 +7,12 @@ servers — OctoWoW / Turtle-style) that helps Priests (and raid leaders) manage
 **Fear Ward** (spell id `6346`: instant, 30s cooldown, 10 min buff that blocks
 the next fear). It does three things:
 
-1. **Cooldown tracking** — a frame (`FearWardHelper_CD`) listing every priest in
+1. **Cooldown tracking** — the frame (`FearWardHelper_CD`) lists every priest in
    the party/raid with their Fear Ward cooldown (green "Ready" / red countdown).
-2. **Ward tracking** — a second frame (`FearWardHelper_Watch`) listing a
+2. **Ward tracking** — the same frame, below a "Targets" sub-header, lists a
    configurable **watch-list** of player names who are currently in the group,
-   showing whether each has the Fear Ward buff and the time left when known.
+   showing whether each has the Fear Ward buff and the time left when known. (There
+   is only one on-screen frame — the two lists always render stacked in `FearWardHelper_CD`.)
 3. **Cast helper** — click a watched player's row, or call the macro globals, to
    cast Fear Ward on them without dropping your current target.
 4. **Notifications** — a floating message area (`FearWardHelper_Notify`) that
@@ -101,7 +102,7 @@ tri-state: `nil` until a scan has an opinion (then the timer alone decides
 ### Low-duration warning
 
 `FearWardHelperDB.lowDuration` (seconds, default **60**, configurable 0–120 via the
-config slider / `/fw low`; **0 disables**) marks a ward as "running low". Two effects,
+config slider; **0 disables**) marks a ward as "running low". Two effects,
 both reading the same `(exp - now) < lowDuration` test:
 
 - **Display** — in `refreshDisplay` a still-present ward whose remaining time is under the
@@ -355,12 +356,12 @@ Active (frames shown; `UNIT_CASTEVENT`, `BUFF_ADDED_*`/`BUFF_REMOVED_*` and
 `CHAT_MSG_ADDON` bound; `OnUpdate` running) while **grouped**, or always if
 `showWhenSolo` — but **only when at least one priest is present** (`priests`
 non-empty: no priest ⇒ no Fear Ward to track, so the addon stays hidden) and the
-master **`hidden`** toggle (`/fw hide` · "Hide addon" checkbox) is off. Both gates are
+master **`hidden`** toggle (the "Hide addon" checkbox) is off. Both gates are
 applied in `rebuildRoster` before the `setActive(...)` call; the config panel itself is
 not active-gated, so `/fw config` still opens to un-hide. `setActive` is idempotent and clears transient tracking on
-deactivation. In `merged` mode `setActive`/`rebuildRows` keep `FearWardHelper_Watch`
-hidden (its rows render inside the CD frame instead), so only the CD frame shows.
-In split mode the watch frame is also hidden when no watched players are present.
+deactivation. There is a single on-screen frame: `rebuildRows` renders the watch rows
+stacked inside `FearWardHelper_CD` (under a "Targets" sub-header), and the target section
+only shows when at least one watched player is present.
 The roster is rebuilt on `RAID_ROSTER_UPDATE` /
 `PARTY_MEMBERS_CHANGED` / `PLAYER_ENTERING_WORLD` into `priests` (ordered, for the
 CD frame), `roster` (ordered list of every present member's name, for the `WardNext`
@@ -376,19 +377,16 @@ any time; only message *generation* is active-gated (`setActive(false)` calls
 
 ## Config (`/fw` + `/fw config` panel)
 
-Slash: `config` (toggle the panel), `add` / `remove` / `list` / `up` / `down`
-(watch-list + priority), `enable` (alias `show`) / `hide <name>` / `disable` (the three
-watch states, below), `hide` / `unhide` (no name — the master `hidden` toggle that hides
-the whole addon; alias `reveal`), `sweep <on|off>` (the WardNext untracked fallback),
-`merge` / `split` (single vs two frames; **merged is the default**), `lock` / `unlock`, `scale <0.5-2>`,
-`low <0-120>` (the low-duration warning threshold; alias `lowdur`/`lowduration`),
-`reset` (layout only; watch-list kept), and
-`notify <cast|loss|low|castfail|cd|groupcd|untracked> <on|off>` / `notify duration <s>` /
-`notify font <size>` / `notify test` (the `notifyCmd` dispatcher). Stored in
+Slash is intentionally minimal — **everything else lives in the config panel** (like
+Quartermaster): bare `/fw` (and `config` / `options` / `opt`) toggles the panel;
+`lock` / `unlock` lock the frames against dragging; anything else prints help. Every
+other setting (watch-list + priority, watch states, the master hide toggle, the
+WardNext sweep, scale/opacity/low-duration, notifications, per-frame anchors, reset)
+is panel-only, driving the same setters the old slash verbs did. Stored in
 `FearWardHelperDB` (`watchList` ordered array, `watchDisabled` + `watchHidden` sets,
 `sweepClassOrder` ordered class-token array + `sweepClassDisabled` set (the sweep's
-class priority), per-frame `cdFrame` / `watchFrame` / `notifyFrame` layout,
-`showWhenSolo`, `hidden`, `merged`, `bgOpacity`, `wardNextSweep`, `lowDuration`, and the notification flags
+class priority), per-frame `cdFrame` / `notifyFrame` layout,
+`showWhenSolo`, `hidden`, `bgOpacity`, `wardNextSweep`, `lowDuration`, and the notification flags
 `notifyApply` /
 `notifyApplyUntracked` / `notifyLoss` / `notifyLowDuration` / `notifyCastFail` / `notifyCDReady` /
 `notifyCDReadyGroup` / `notifyDuration` / `notifyFontSize`). Names are stored tidied
@@ -419,10 +417,11 @@ starts shown.
 
 **Config UI** (`/fw config`) — a hand-rolled panel (`FearWardHelper_Config`, built
 lazily in Lua in `buildConfig`, *not* pfUI's framework / not Blizzard's
-`UIDropDownMenu`). It is purely a front-end: every widget calls the same setters
-the slash commands do (`addWatch` / `removeWatch` / `moveWatch` / `setMerged` /
-`lockAll` / `setShowWhenSolo` / `setScale` / `setBgOpacity` / `setAnchor` /
-`setFramePos` / `resetLayout`). The DB is the single source of truth; `refreshConfig()` re-reads it
+`UIDropDownMenu`). It is purely a front-end: every widget calls a shared setter
+(`addWatch` / `removeWatch` / `moveWatch` / `lockAll` / `setShowWhenSolo` /
+`setScale` / `setBgOpacity` / `setAnchor` / `setFramePos` / `resetLayout`) — the same
+setters the two surviving slash verbs (`lock` / `unlock`) and the frame drag handlers
+call. The DB is the single source of truth; `refreshConfig()` re-reads it
 into every widget and is poked by **all** of those setters and by the frames'
 drag/resize handlers (`OnDragStop` / `StopSizing`), so the panel, the slash
 commands and live dragging never disagree. `refreshConfig` is forward-declared up
@@ -434,10 +433,10 @@ checkboxes/sliders sit side by side): a scrollable watch-list editor
 (`VISIBLE_ROWS` = 5 visible at a time, backed by a `FauxScrollFrame`; each row has a
 **tri-state button** (`S`/`H`/`O`) + ^/v/X buttons — the button calls `cycleWatchState`
 to rotate shown → hidden → off, the name greying/tagging to match (`(hidden)` dim grey,
-`(off)` grey, else class-coloured, `(away)` if absent)), an add box, five checkboxes
-(single combined frame / lock / show-when-solo / "Hide addon" = `hidden` (the master
-hide toggle, routed through `setHidden`) / "Allow Ward untracked" =
-`wardNextSweep`), and **five sliders** (`LibWidgets.NewSlider`, an
+`(off)` grey, else class-coloured, `(away)` if absent)), an add box, four checkboxes
+(lock / show-when-solo / "Allow Ward untracked" = `wardNextSweep` / "Hide addon" =
+`hidden` (the master hide toggle, routed through `setHidden`), laid out 2×2), and
+**five sliders** (`LibWidgets.NewSlider`, an
 `OptionsSliderTemplate` whose `$parentText` carries the live value via each
 slider's own `format(v)` spec field): **scale** (0.5–2.0, driving `setScale`
 with a `silent` arg so dragging doesn't spam chat), **background opacity** (0–1,
@@ -454,15 +453,14 @@ casts (`notifyCastFail`), then announce CD ready / announce group CD ready, then
 low ward (`notifyLowDuration` — fires when a tracked ward drops below the low-ward slider) —
 above the fade/font sliders. All boolean notify toggles **and** the `wardNextSweep` toggle route
 through one shared `setNotifyFlag(flag, on)` (a plain boolean DB write + `refreshConfig`)
-rather than a setter each. (The slash-only `setWardNextSweep` exists just to also print
-a chat line; the panel deliberately doesn't reference it.)
+rather than a setter each.
 
 **Upvalue budget.** Lua 5.0 caps a function at **32 upvalues** (every chunk-level local
 a nested handler references counts as one for the enclosing `buildConfig`), and the panel
 was right at the edge. To stay clear, the local widget factories + setters `buildConfig`
 closes over are **bundled into two tables built just above it** — `ui` (the remaining
 `cfg*` factories: `cfgHeader` / `cfgCheck` / `cfgPosRow`) and `act` (the
-setters) — so the body reaches them as `ui.cfgCheck` / `act.setMerged`, costing **one
+setters) — so the body reaches them as `ui.cfgCheck` / `act.setScale`, costing **one
 upvalue per table** instead of one per function. Buttons, text boxes, sliders and the
 anchor drop button are `LibWidgets.NewButton` / `NewTextBox` / `NewSlider` /
 `NewDropButton` calls instead — `LibWidgets` is a *global* (assigned via
@@ -479,11 +477,10 @@ fresh chunk-level local from inside `buildConfig`.
 Finally per-frame **anchor** controls — each a single row
 (`cfgPosRow`): a name label, a `LibWidgets.NewDropButton` (values = the nine
 `ANCHOR_POINTS`, no labels needed since the point name **is** the label) and X/Y
-`LibWidgets.NewTextBox` boxes, one row each for the CD, Target and Notify frames.
-`p.layoutPos(merged)` (called from `refreshConfig`) stacks those rows, **hides the
-Target row and reclaims its space in merged mode**, then pins the Reset button below
-the last row and resizes the panel — so split mode grows the panel rather than leaving
-a gap. Category headers use `cfgHeader` (a slightly larger yellow font than the
+`LibWidgets.NewTextBox` boxes, one row each for the tracker ("Frame") and Notify frames.
+`p.layoutPos()` (called from `refreshConfig`) stacks those rows, then pins the Reset
+button below the last row and resizes the panel to fit. Category headers use
+`cfgHeader` (a slightly larger yellow font than the
 per-widget `cfgLabel`); the title is +2pt. The remaining small local factories
 (`cfgLabel` / `cfgHeader` / `cfgCheck` / `cfgPosRow`) keep it terse; standard 1.12
 templates (`UICheckButtonTemplate` / `UIPanelCloseButton`) back the checkbox/close-X,
@@ -519,30 +516,29 @@ upvalue).
 
 - [FearWardHelper.lua](FearWardHelper.lua) — all logic (including the config panel,
   built in Lua so it can reach the existing local setters directly).
-- [FearWardHelper.xml](FearWardHelper.xml) — the two moveable tracker frames
-  (`FearWardHelper_CD` = engine + CD list, `FearWardHelper_Watch` = watch/cast
-  list) plus the `FearWardHelper_Notify` notification area (see "Notifications").
-  Rows / notification lines are built in Lua; backdrops applied in `OnLoad`. The two
-  tracker frames have a bottom-right **width grip** (`$parentResizeGrip`, shown only
+- [FearWardHelper.xml](FearWardHelper.xml) — the single moveable tracker frame
+  (`FearWardHelper_CD` = engine + both lists) plus the `FearWardHelper_Notify`
+  notification area (see "Notifications").
+  Rows / notification lines are built in Lua; backdrops applied in `OnLoad`. The
+  tracker frame has a bottom-right **width grip** (`$parentResizeGrip`, shown only
   while unlocked, its frame level raised in `OnLoad` so the clickable watch rows
   don't eat its mouse): `StartSizing("RIGHT")` resizes **width only** — height is
   content-driven (`sizeFrame` fits the row count), so no height clamp is needed.
-  Saved width is `cdFrame.width` / `watchFrame.width`. The notify frame has **no
+  Saved width is `cdFrame.width`. The notify frame has **no
   grip** (its "size" is the font size) — `setupTrackerFrame` / `setLocked` guard the
   grip lookup so it works without one.
-- **Merged (single-frame) mode** (`merged` in the DB) — `rebuildRows` stacks both
-  lists inside `FearWardHelper_CD`: CD rows, then a divider line + "Targets"
-  sub-header (`getTargetHeader`, lazily created on the CD frame), then the watch
-  rows, and hides `FearWardHelper_Watch`. The divider sits above the header text
-  (with a small gap from the last CD row) so it visually separates the two
-  sections. The target section (divider + header + watch rows) is only shown when
-  at least one watched player is present in the group; otherwise the CD frame sizes
-  to just the priest rows. Rows no longer self-anchor at creation; `makeRow` just
-  builds the widgets and `placeRow` (re-)parents + positions them each rebuild, so
-  a pooled watch row works in either frame. Merged mode reuses the `cdFrame` layout
-  entry (position/scale/lock/width) — toggling merge does not introduce a third
-  layout. The CD title swaps between "Fear Ward CDs" (split) and "Fear Ward"
-  (merged).
+- **Single-frame layout** — `rebuildRows` stacks both lists inside
+  `FearWardHelper_CD`: CD rows, then a divider line + "Targets" sub-header
+  (`getTargetHeader`, lazily created on the CD frame), then the watch rows. The
+  divider sits above the header text (with a small gap from the last CD row) so it
+  visually separates the two sections. The target section (divider + header + watch
+  rows) is only shown when at least one watched player is present in the group;
+  otherwise the CD frame sizes to just the priest rows. Rows don't self-anchor at
+  creation; `makeRow` just builds the widgets and `placeRow` positions (and, if a
+  pooled row was created under another parent, re-parents) them each rebuild. The
+  frame title is a fixed "Fear Ward" (set in the XML). (This was once a toggleable
+  merged/split pair of frames; the split mode and its `FearWardHelper_Watch` /
+  `watchFrame` / `merged` machinery were removed — one frame is the only layout now.)
 - `textures/ResizeGrip.tga` — the grip glyph, bundled because this client lacks
   Blizzard's chat SizeGrabber textures (copied from PrayerHelper).
 - `textures/arrow.tga` — the 108-frame pre-rotated arrow atlas for the hover direction
