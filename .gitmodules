@@ -1,0 +1,3 @@
+[submodule "Libs/LibWidgets"]
+	path = Libs/LibWidgets
+	url = https://github.com/fuffc/LibWidgets.git

@@ -54,6 +54,11 @@ local RANGE_SLACK        = 3       -- yards of fudge for centre-to-centre vs the
                                    -- (cast/LOS gate) and oorDistance (the hover OOR gate).
 local ADDON_PREFIX       = "FWH"   -- addon-message prefix for cooldown sync
 
+-- LibWidgets (Libs\LibWidgets\LibWidgets.lua) is vendored source shared
+-- across addons, so it can't hardcode which addon it's running in; every
+-- LibWidgets.NewListEditor(...) call below passes this as spec.textureDir.
+local LIB_WIDGETS_TEXTURE_DIR = "Interface\\AddOns\\FearWardHelper\\Libs\\LibWidgets\\textures\\"
+
 -- Direction arrow shown on a watch row when the target is in object range but out
 -- of cast range -- which way to run to reach them. Uses pfQuest's arrow.tga: a
 -- 512x512 sheet, a 9x12 grid of 56x42 frames = 108 pre-rotated arrows (no
@@ -1871,6 +1876,22 @@ local function moveWatch(name, dir)
 	refreshIfActive()
 end
 
+-- Splice-based reorder (the config list's drag-to-reorder and its arrow
+-- buttons; see LibWidgets.lua's spec.reorder for the exact "before"
+-- boundary convention, mirroring Quartermaster's QM.reorderDesired).
+local function reorderWatch(from, before)
+	local wl = FearWardHelperDB.watchList
+	local n = table.getn(wl)
+	if from < 1 or from > n then return end
+	if before < 1 then before = 1 elseif before > n + 1 then before = n + 1 end
+	if before == from or before == from + 1 then return end
+	local item = table.remove(wl, from)
+	local insertAt = before
+	if before > from then insertAt = before - 1 end
+	table.insert(wl, insertAt, item)
+	refreshIfActive()
+end
+
 local function listWatch()
 	local wl = FearWardHelperDB.watchList
 	local n = table.getn(wl)
@@ -2073,19 +2094,6 @@ local PANEL_BACKDROP = {
 	tile = true, tileSize = 32, edgeSize = 16,
 	insets = { left = 5, right = 5, top = 5, bottom = 5 },
 }
-local MENU_BACKDROP = {
-	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-	tile = true, tileSize = 16, edgeSize = 12,
-	insets = { left = 3, right = 3, top = 3, bottom = 3 },
-}
-local EDITBOX_BACKDROP = {
-	bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-	edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-	tile = true, tileSize = 16, edgeSize = 9,
-	insets = { left = 3, right = 3, top = 3, bottom = 3 },
-}
-
 -- A small label above a widget.
 local function cfgLabel(parent, text, x, y)
 	local fs = parent:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
@@ -2111,83 +2119,11 @@ local function cfgCheck(parent, text, onClick)
 	local fs = cb:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
 	fs:SetPoint("LEFT", cb, "RIGHT", 2, 0)
 	fs:SetText(text)
-	cb:SetScript("OnClick", function() onClick(this:GetChecked() and true or false) end)
+	cb:SetScript("OnClick", function()
+		LibWidgets.CloseAllMenus()
+		onClick(this:GetChecked() and true or false)
+	end)
 	return cb
-end
-
--- A horizontal slider (OptionsSliderTemplate) with a title above it. onChange gets
--- the new value; updateTitle paints the live value into the title text. A guard flag
--- on the panel suppresses the OnValueChanged feedback while refreshConfig sets it.
-local function cfgSlider(parent, name, min, max, step, onChange)
-	local s = CreateFrame("Slider", name, parent, "OptionsSliderTemplate")
-	s:SetMinMaxValues(min, max)
-	s:SetValueStep(step)
-	s:SetWidth(150); s:SetHeight(16)
-	-- The template's Low/High end labels are noise here; the title carries the value.
-	getglobal(name .. "Low"):SetText("")
-	getglobal(name .. "High"):SetText("")
-	s:SetScript("OnValueChanged", function()
-		if configPanel and configPanel.settingSlider then return end
-		onChange(this:GetValue())
-	end)
-	return s
-end
-
--- A text/numeric edit box with a tooltip-style backdrop (no InputBoxTemplate —
--- that template's border textures render a black bar at small heights).
-local function cfgEdit(parent, width, onCommit)
-	local e = CreateFrame("EditBox", nil, parent)
-	e:SetWidth(width); e:SetHeight(22)
-	e:SetAutoFocus(false)
-	e:SetFontObject(GameFontHighlightSmall)
-	e:SetTextInsets(5, 5, 2, 2)
-	e:SetBackdrop(EDITBOX_BACKDROP)
-	e:SetBackdropColor(0, 0, 0, 0.7)
-	e:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
-	local commit = function() onCommit(this:GetText()); this:ClearFocus() end
-	e:SetScript("OnEnterPressed", commit)
-	e:SetScript("OnEscapePressed", function() this:ClearFocus() end)
-	return e
-end
-
--- A hand-rolled anchor "dropdown": a button showing the current point, with a popup
--- listing the nine points. Selecting one calls setAnchor on the target frame.
-local function cfgAnchorDropdown(parent, getFrame)
-	local btn = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
-	btn:SetWidth(92); btn:SetHeight(20)
-
-	local menu = CreateFrame("Frame", nil, btn)
-	menu:SetBackdrop(MENU_BACKDROP)
-	menu:SetBackdropColor(0, 0, 0, 0.95)
-	menu:SetWidth(92)
-	menu:SetHeight(table.getn(ANCHOR_POINTS) * 14 + 8)
-	menu:SetPoint("TOPLEFT", btn, "BOTTOMLEFT", 0, 0)
-	menu:SetFrameStrata("DIALOG")
-	menu:Hide()
-	btn.menu = menu
-
-	for i = 1, table.getn(ANCHOR_POINTS) do
-		local point = ANCHOR_POINTS[i]
-		local item = CreateFrame("Button", nil, menu)
-		item:SetHeight(14)
-		item:SetPoint("TOPLEFT", menu, "TOPLEFT", 4, -(4 + (i - 1) * 14))
-		item:SetPoint("RIGHT", menu, "RIGHT", -4, 0)
-		local fs = item:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-		fs:SetPoint("LEFT", item, "LEFT", 2, 0)
-		fs:SetText(point)
-		local hl = item:CreateTexture(nil, "HIGHLIGHT")
-		hl:SetAllPoints(item); hl:SetTexture(0.3, 0.3, 0.8, 0.5)
-		item:SetScript("OnClick", function()
-			menu:Hide()
-			setAnchor(getFrame(), point)
-			btn:SetText(point)
-		end)
-	end
-
-	btn:SetScript("OnClick", function()
-		if menu:IsShown() then menu:Hide() else menu:Show() end
-	end)
-	return btn
 end
 
 -- Build one frame's position controls into a single row: name label + anchor
@@ -2202,7 +2138,14 @@ local function cfgPosRow(parent, getFrame)
 	row.label:SetPoint("LEFT", row, "LEFT", 0, 0)
 	row.label:SetWidth(64); row.label:SetJustifyH("LEFT")
 
-	row.anchor = cfgAnchorDropdown(row, getFrame)
+	row.anchor = LibWidgets.NewDropButton(row, {
+		width = 92, height = 20,
+		values = ANCHOR_POINTS,
+		onSelect = function(point)
+			setAnchor(getFrame(), point)
+			row.anchor.setValue(point)
+		end,
+	})
 	row.anchor:SetPoint("LEFT", row, "LEFT", 66, 0)
 
 	local applyPos = function()
@@ -2212,11 +2155,11 @@ local function cfgPosRow(parent, getFrame)
 	end
 	local xl = row:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 	xl:SetPoint("LEFT", row.anchor, "RIGHT", 8, 0); xl:SetText("X")
-	row.x = cfgEdit(row, 40, applyPos)
+	row.x = LibWidgets.NewTextBox(row, { width = 40, onCommit = applyPos })
 	row.x:SetPoint("LEFT", xl, "RIGHT", 3, 0)
 	local yl = row:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
 	yl:SetPoint("LEFT", row.x, "RIGHT", 8, 0); yl:SetText("Y")
-	row.y = cfgEdit(row, 40, applyPos)
+	row.y = LibWidgets.NewTextBox(row, { width = 40, onCommit = applyPos })
 	row.y:SetPoint("LEFT", yl, "RIGHT", 3, 0)
 	return row
 end
@@ -2233,25 +2176,19 @@ refreshConfig = function()
 	p.hideCheck:SetChecked(db.hidden)
 	p.sweepCheck:SetChecked(db.wardNextSweep)
 
-	-- Sliders. Guard the value writes so OnValueChanged (which would call back into
-	-- the setters) doesn't echo while we're just syncing the widgets from the DB.
+	-- Sliders: .setValue seeds the widget and repaints its title under its own
+	-- internal guard, so no cross-widget flag is needed to suppress the echo back
+	-- into onChange while we're just syncing from the DB.
 	local sc   = db.cdFrame.scale or 1
 	local op   = db.bgOpacity; if op == nil then op = 0.8 end
 	local fade = db.notifyDuration or 5
 	local font = db.notifyFontSize or 14
 	local lowdur = db.lowDuration; if lowdur == nil then lowdur = 60 end
-	p.settingSlider = true
-	p.scaleSlider:SetValue(sc)
-	p.opacitySlider:SetValue(op)
-	p.lowDurSlider:SetValue(lowdur)
-	p.notifyDurSlider:SetValue(fade)
-	p.notifyFontSlider:SetValue(font)
-	p.settingSlider = false
-	getglobal("FWH_CfgScaleText"):SetText(string.format("Scale  %.1f", sc))
-	getglobal("FWH_CfgOpacityText"):SetText(string.format("Background opacity  %d%%", math.floor(op * 100 + 0.5)))
-	getglobal("FWH_CfgLowDurText"):SetText(lowdur > 0 and string.format("Low ward threshold  %ds", lowdur) or "Low ward threshold  off")
-	getglobal("FWH_CfgFadeText"):SetText(string.format("Fade after  %ds", fade))
-	getglobal("FWH_CfgFontText"):SetText(string.format("Font size  %d", font))
+	p.scaleSlider.setValue(sc)
+	p.opacitySlider.setValue(op)
+	p.lowDurSlider.setValue(lowdur)
+	p.notifyDurSlider.setValue(fade)
+	p.notifyFontSlider.setValue(font)
 
 	-- Notification toggles.
 	p.notifyApplyCheck:SetChecked(db.notifyApply)
@@ -2268,17 +2205,17 @@ refreshConfig = function()
 	-- Frame-position rows: CD row always; watch row only in split mode; notify always.
 	-- layoutPos re-stacks them so split mode grows the panel rather than leaving a gap.
 	p.cdPos.label:SetText(db.merged and "Frame" or "CD frame")
-	p.cdPos.anchor:SetText(db.cdFrame.point)
+	p.cdPos.anchor.setValue(db.cdFrame.point)
 	p.cdPos.x:SetText(string.format("%.0f", db.cdFrame.x))
 	p.cdPos.y:SetText(string.format("%.0f", db.cdFrame.y))
 	if not db.merged then
 		p.watchPos.label:SetText("Target frame")
-		p.watchPos.anchor:SetText(db.watchFrame.point)
+		p.watchPos.anchor.setValue(db.watchFrame.point)
 		p.watchPos.x:SetText(string.format("%.0f", db.watchFrame.x))
 		p.watchPos.y:SetText(string.format("%.0f", db.watchFrame.y))
 	end
 	p.notifyPos.label:SetText("Notify frame")
-	p.notifyPos.anchor:SetText(db.notifyFrame.point)
+	p.notifyPos.anchor.setValue(db.notifyFrame.point)
 	p.notifyPos.x:SetText(string.format("%.0f", db.notifyFrame.x))
 	p.notifyPos.y:SetText(string.format("%.0f", db.notifyFrame.y))
 	p.layoutPos(db.merged)
@@ -2292,46 +2229,42 @@ local function classDisplayName(token)
 	return string.upper(string.sub(token, 1, 1)) .. string.lower(string.sub(token, 2))
 end
 
-local function findClassIndex(token)
-	local order = FearWardHelperDB.sweepClassOrder
-	for i = 1, table.getn(order) do
-		if order[i] == token then return i end
-	end
-	return nil
-end
-
--- Move a class up (dir -1) / down (dir +1) the sweep priority order.
-local function moveSweepClass(token, dir)
-	local order = FearWardHelperDB.sweepClassOrder
-	local i = findClassIndex(token)
-	if not i then return end
-	local j = i + dir
-	if j < 1 or j > table.getn(order) then return end
-	order[i], order[j] = order[j], order[i]
-	if classPanel and classPanel.refresh then classPanel.refresh() end
-end
-
 -- Enable/disable a class for the sweep; a disabled class is ignored entirely.
 local function setSweepClassEnabled(token, on)
 	FearWardHelperDB.sweepClassDisabled[token] = (not on) and true or nil
 	if classPanel and classPanel.refresh then classPanel.refresh() end
 end
 
--- A small popup (one fixed row per class, no scroll/add/remove) for ordering the
--- sweep's class priority and toggling classes out of it. Built lazily; toggled by
--- the "Class priority" button on the config panel. Its own function = its own
--- upvalue budget (buildConfig is near Lua 5.0's 32-upvalue limit).
+-- Splice-based reorder for the class-priority popup's drag-to-reorder / arrow
+-- buttons (see LibWidgets.lua's spec.reorder for the "before" boundary
+-- convention, mirroring Quartermaster's QM.reorderDesired).
+local function reorderSweepClass(from, before)
+	local order = FearWardHelperDB.sweepClassOrder
+	local n = table.getn(order)
+	if from < 1 or from > n then return end
+	if before < 1 then before = 1 elseif before > n + 1 then before = n + 1 end
+	if before == from or before == from + 1 then return end
+	local item = table.remove(order, from)
+	local insertAt = before
+	if before > from then insertAt = before - 1 end
+	table.insert(order, insertAt, item)
+	if classPanel and classPanel.refresh then classPanel.refresh() end
+end
+
+-- A small popup (one fixed row per class, no add/remove -- the roster of nine
+-- classes is fixed) for ordering the sweep's class priority and toggling
+-- classes out of it. Built lazily; toggled by the "Class priority" button on
+-- the config panel. Its own function = its own upvalue budget (buildConfig is
+-- near Lua 5.0's 32-upvalue limit).
 local function buildClassPriority()
 	if classPanel then return end
 	if not configPanel then return end   -- parented to the config panel; built with it
 	local n = table.getn(CLASS_TOKENS)
-	local CR_H = 18
-	local TOP = 30          -- title strip
+	local TOP = 30   -- title strip
 	local BOT = 8
 	local p = CreateFrame("Frame", "FearWardHelper_ClassPriority", configPanel)
 	classPanel = p
 	p:SetWidth(160)
-	p:SetHeight(TOP + n * CR_H + BOT)
 	p:SetPoint("TOPLEFT", configPanel, "TOPRIGHT", 6, 0)
 	p:SetBackdrop(PANEL_BACKDROP)
 	p:SetFrameStrata("DIALOG")
@@ -2345,56 +2278,26 @@ local function buildClassPriority()
 	local close = CreateFrame("Button", nil, p, "UIPanelCloseButton")
 	close:SetPoint("TOPRIGHT", p, "TOPRIGHT", -2, -2)
 
-	p.rows = {}
-	for i = 1, n do
-		local row = CreateFrame("Frame", nil, p)
-		row:SetHeight(CR_H)
-		row:SetPoint("TOPLEFT", p, "TOPLEFT", 10, -(TOP + (i - 1) * CR_H))
-		row:SetPoint("RIGHT", p, "RIGHT", -8, 0)
-
-		local en = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
-		en:SetWidth(18); en:SetHeight(18)
-		en:SetPoint("LEFT", row, "LEFT", 0, 0)
-		en:SetScript("OnClick", function()
-			setSweepClassEnabled(row.token, this:GetChecked() and true or false)
-		end)
-		row.enable = en
-
-		local nameFS = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-		nameFS:SetPoint("LEFT", en, "RIGHT", 4, 0)
-		nameFS:SetJustifyH("LEFT")
-		row.name = nameFS
-
-		local dn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		dn:SetWidth(20); dn:SetHeight(16); dn:SetText("v")
-		dn:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-		dn:SetScript("OnClick", function() moveSweepClass(row.token, 1) end)
-		row.down = dn
-
-		local up = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		up:SetWidth(20); up:SetHeight(16); up:SetText("^")
-		up:SetPoint("RIGHT", dn, "LEFT", -2, 0)
-		up:SetScript("OnClick", function() moveSweepClass(row.token, -1) end)
-		row.up = up
-
-		p.rows[i] = row
-	end
-
-	p.refresh = function()
-		local order = FearWardHelperDB.sweepClassOrder
-		local disabled = FearWardHelperDB.sweepClassDisabled
-		local cnt = table.getn(order)
-		for i = 1, n do
-			local row = p.rows[i]
-			local token = order[i]
-			row.token = token
-			row.enable:SetChecked(not disabled[token])
-			row.name:SetText(classDisplayName(token))
-			row.name:SetTextColor(classColor(token))
-			if i == 1 then row.up:Disable() else row.up:Enable() end
-			if i == cnt then row.down:Disable() else row.down:Enable() end
-		end
-	end
+	-- visibleRows = n: all nine classes always fit, so the scrollbar never
+	-- actually engages -- the same list editor the watch-list uses degrades
+	-- to a fixed, non-scrolling list for free.
+	local editor = LibWidgets.NewListEditor(p, {
+		nameFrame = "FWH_ClassPriorityScroll",
+		textureDir = LIB_WIDGETS_TEXTURE_DIR,
+		x = 8, y = -TOP, rightInset = 8,
+		rowHeight = 18, visibleRows = n,
+		list = function() return FearWardHelperDB.sweepClassOrder end,
+		reorder = reorderSweepClass,
+		leadingControl = {
+			kind = "checkbox",
+			get = function(token) return not FearWardHelperDB.sweepClassDisabled[token] end,
+			set = setSweepClassEnabled,
+		},
+		nameGet = classDisplayName,
+		nameColor = classColor,
+	})
+	p:SetHeight(TOP + editor.height + BOT)
+	p.refresh = editor.refresh
 
 	p:Hide()
 end
@@ -2408,11 +2311,11 @@ end
 -- upvalues so the closure sees the new value -- they deliberately aren't bundled here;
 -- watchState / classColor stay direct too (cheap, and used only by updateWatchList).
 local ui = {
-	cfgHeader = cfgHeader, cfgCheck = cfgCheck, cfgEdit = cfgEdit,
-	cfgSlider = cfgSlider, cfgPosRow = cfgPosRow,
+	cfgHeader = cfgHeader, cfgCheck = cfgCheck, cfgPosRow = cfgPosRow,
 }
 local act = {
 	addWatch = addWatch, removeWatch = removeWatch, moveWatch = moveWatch,
+	reorderWatch = reorderWatch,
 	cycleWatchState = cycleWatchState, setMerged = setMerged,
 	setShowWhenSolo = setShowWhenSolo, setHidden = setHidden, lockAll = lockAll, setNotifyFlag = setNotifyFlag,
 	setScale = setScale, setBgOpacity = setBgOpacity, notifyTest = notifyTest,
@@ -2433,6 +2336,12 @@ local function buildConfig()
 	p:RegisterForDrag("LeftButton")
 	p:SetScript("OnDragStart", function() this:StartMoving() end)
 	p:SetScript("OnDragStop", function() this:StopMovingOrSizing() end)
+	-- Close any open LibWidgets dropdown on a blank-panel click (no other widget's
+	-- own handler catches that case) and when the panel itself closes -- a menu
+	-- left open under a hidden parent keeps its own Shown flag and would otherwise
+	-- pop back up still expanded the next time the panel opens.
+	p:SetScript("OnMouseDown", function() LibWidgets.CloseAllMenus() end)
+	p:SetScript("OnHide", function() LibWidgets.CloseAllMenus() end)
 
 	local title = p:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	title:SetFont(STANDARD_TEXT_FONT, 14)   -- +2pt over the default header
@@ -2446,8 +2355,7 @@ local function buildConfig()
 	ui.cfgHeader(p, "Tracked players (priority)", 16, -36)
 
 	-- "Class priority" button (opens the sweep class-order popup beside the panel).
-	local classBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
-	classBtn:SetWidth(96); classBtn:SetHeight(18); classBtn:SetText("Class priority")
+	local classBtn = LibWidgets.NewButton(p, { text = "Class priority", width = 96, height = 18 })
 	classBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -14, -34)
 	-- Toggle the class-priority popup inline. buildClassPriority + classPanel become
 	-- buildConfig upvalues, which the ui/act bundling above leaves room for. classPanel
@@ -2464,139 +2372,56 @@ local function buildConfig()
 	end)
 
 	local rowTop = -54
-	local listPad = 4   -- inner padding of the bordered list container
-	local listH  = VISIBLE_ROWS * ROW_HEIGHT + listPad * 2
 
-	-- Bordered container for the player list.
-	local listBox = CreateFrame("Frame", nil, p)
-	listBox:SetPoint("TOPLEFT", p, "TOPLEFT", 16, rowTop)
-	listBox:SetPoint("RIGHT", p, "RIGHT", -16, 0)
-	listBox:SetHeight(listH)
-	listBox:SetBackdrop(EDITBOX_BACKDROP)
-	listBox:SetBackdropColor(0, 0, 0, 0.5)
-	listBox:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
-
-	-- FauxScrollFrame provides the scrollbar; sized inside the container so the
-	-- scrollbar sits within the border.
-	local scroll = CreateFrame("ScrollFrame", "FWH_CfgScroll", listBox, "FauxScrollFrameTemplate")
-	scroll:SetHeight(VISIBLE_ROWS * ROW_HEIGHT)
-	scroll:SetPoint("TOPLEFT", listBox, "TOPLEFT", listPad, -listPad)
-	scroll:SetPoint("RIGHT", listBox, "RIGHT", -(listPad + 18), 0)
-	p.scroll = scroll
-
-	local function forwardWheel()
-		local sb = getglobal("FWH_CfgScrollScrollBar")
-		if sb then sb:SetValue(sb:GetValue() - arg1 * ROW_HEIGHT) end
-	end
-	scroll:EnableMouseWheel(true)
-	scroll:SetScript("OnMouseWheel", forwardWheel)
-	listBox:EnableMouseWheel(true)
-	listBox:SetScript("OnMouseWheel", forwardWheel)
-
-	p.rows = {}
-	for i = 1, VISIBLE_ROWS do
-		local row = CreateFrame("Frame", nil, listBox)
-		row:SetHeight(ROW_HEIGHT)
-		row:SetPoint("TOPLEFT", listBox, "TOPLEFT", listPad + 2, -listPad - (i - 1) * ROW_HEIGHT)
-		row:SetPoint("RIGHT", listBox, "RIGHT", -(listPad + 22), 0)
-
-		-- State button: cycles Shown (S) -> Hidden (H) -> Off (O). Shown = tracked +
-		-- row; Hidden = tracked priority but no row; Off = inert (kept in list).
-		local st = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		st:SetWidth(20); st:SetHeight(16)
-		st:SetPoint("LEFT", row, "LEFT", 0, 0)
-		st:SetScript("OnClick", function() act.cycleWatchState(row.wname) end)
-		row.state = st
-
-		local nameFS = row:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-		nameFS:SetPoint("LEFT", st, "RIGHT", 4, 0)
-		nameFS:SetJustifyH("LEFT")
-		row.name = nameFS
-
-		local rm = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		rm:SetWidth(20); rm:SetHeight(16); rm:SetText("X")
-		rm:SetPoint("RIGHT", row, "RIGHT", 0, 0)
-		rm:SetScript("OnClick", function() act.removeWatch(row.wname) end)
-
-		local dn = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		dn:SetWidth(20); dn:SetHeight(16); dn:SetText("v")
-		dn:SetPoint("RIGHT", rm, "LEFT", -2, 0)
-		dn:SetScript("OnClick", function() act.moveWatch(row.wname, 1) end)
-
-		local up = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-		up:SetWidth(20); up:SetHeight(16); up:SetText("^")
-		up:SetPoint("RIGHT", dn, "LEFT", -2, 0)
-		up:SetScript("OnClick", function() act.moveWatch(row.wname, -1) end)
-
-		row.up, row.down = up, dn
-		row:EnableMouseWheel(true)
-		row:SetScript("OnMouseWheel", forwardWheel)
-		row:Hide()
-		p.rows[i] = row
-	end
-
-	-- Populates the visible rows from the watch-list at the current scroll offset.
-	p.updateWatchList = function()
-		local wl = FearWardHelperDB.watchList
-		local n = table.getn(wl)
-		FauxScrollFrame_Update(scroll, n, VISIBLE_ROWS, ROW_HEIGHT)
-		local offset = FauxScrollFrame_GetOffset(scroll)
-		for i = 1, VISIBLE_ROWS do
-			local row = p.rows[i]
-			local idx = offset + i
-			if idx <= n then
-				local name = wl[idx]
-				local actual = presentLower[string.lower(name)]
-				local state = watchState(name)
-				if state == "off" then
-					row.state:SetText("O")
-					row.name:SetText(name .. "  (off)")
-					row.name:SetTextColor(0.5, 0.5, 0.5)   -- greyed: not tracked
-				elseif state == "hidden" then
-					row.state:SetText("H")
-					row.name:SetText(name .. "  (hidden)")
-					row.name:SetTextColor(0.7, 0.7, 0.7)   -- dim: tracked but no row
-				else
-					row.state:SetText("S")
-					row.name:SetText(name .. ((not actual) and "  (away)" or ""))
-					row.name:SetTextColor(classColor(actual and classByName[actual] or nil))
-				end
-				if idx == 1 then row.up:Disable() else row.up:Enable() end
-				if idx == n then row.down:Disable() else row.down:Enable() end
-				row.wname = name
-				row:Show()
+	-- The watch-list editor: a LibWidgets list editor bound to
+	-- FearWardHelperDB.watchList, with a tristate shown/hidden/off leading chip
+	-- (see "Watch states" in CLAUDE.md) in place of the config panel's own
+	-- row-building/reorder code.
+	local watchEditor = LibWidgets.NewListEditor(p, {
+		nameFrame = "FWH_CfgWatchScroll",
+		textureDir = LIB_WIDGETS_TEXTURE_DIR,
+		x = 16, y = rowTop, rightInset = 16,
+		rowHeight = ROW_HEIGHT, visibleRows = VISIBLE_ROWS,
+		list = function() return FearWardHelperDB.watchList end,
+		reorder = act.reorderWatch,
+		remove = function(index) act.removeWatch(FearWardHelperDB.watchList[index]) end,
+		add = { onAdd = act.addWatch },
+		leadingControl = {
+			kind = "tristate",
+			states = {
+				{ key = "shown",  color = { 0.20, 0.80, 0.20 }, tooltip = "Shown -- tracked, has a row, a WardNext priority" },
+				{ key = "hidden", color = { 0.95, 0.75, 0.10 }, tooltip = "Hidden -- still a WardNext priority, no tracker row" },
+				{ key = "off",    color = { 0.45, 0.45, 0.45 }, tooltip = "Off -- kept in the list, not a priority" },
+			},
+			get = watchState, cycle = act.cycleWatchState,
+		},
+		nameGet = function(name)
+			local state = watchState(name)
+			if state == "off" then return name .. "  (off)"
+			elseif state == "hidden" then return name .. "  (hidden)"
 			else
-				row:Hide()
+				local actual = presentLower[string.lower(name)]
+				return name .. ((not actual) and "  (away)" or "")
 			end
-		end
-	end
-
-	scroll:SetScript("OnVerticalScroll", function()
-		FauxScrollFrame_OnVerticalScroll(ROW_HEIGHT, p.updateWatchList)
-	end)
-
-	-- Add box: full width, Add button right-aligned.
-	local addY = rowTop - listH - 8
-	local addBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
-	addBtn:SetWidth(50); addBtn:SetHeight(22); addBtn:SetText("Add")
-	addBtn:SetPoint("TOPRIGHT", p, "TOPRIGHT", -16, addY)
-	local addBox = ui.cfgEdit(p, 0, function(text)
-		if text and text ~= "" then act.addWatch(text); configPanel.addBox:SetText("") end
-	end)
-	addBox:SetPoint("TOPLEFT", p, "TOPLEFT", 18, addY)
-	addBox:SetPoint("RIGHT", addBtn, "LEFT", -6, 0)
-	p.addBox = addBox
-	addBtn:SetScript("OnClick", function()
-		local text = configPanel.addBox:GetText()
-		if text and text ~= "" then act.addWatch(text); configPanel.addBox:SetText("") end
-	end)
+		end,
+		nameColor = function(name)
+			local state = watchState(name)
+			if state == "off" then return 0.5, 0.5, 0.5
+			elseif state == "hidden" then return 0.7, 0.7, 0.7
+			else
+				local actual = presentLower[string.lower(name)]
+				return classColor(actual and classByName[actual] or nil)
+			end
+		end,
+	})
+	p.updateWatchList = watchEditor.refresh
 
 	-- Layout columns shared by the two-up rows below.
 	local COL1, COL2   = 14, 190    -- checkbox columns
 	local SCOL1, SCOL2 = 18, 192    -- slider columns
 
 	-- Toggles (two columns) -------------------------------------------------
-	local togY = addY - 30
+	local togY = rowTop - watchEditor.height - 8
 	p.mergedCheck = ui.cfgCheck(p, "Single combined frame", function(on) act.setMerged(on) end)
 	p.mergedCheck:SetPoint("TOPLEFT", p, "TOPLEFT", COL1, togY)
 	p.soloCheck = ui.cfgCheck(p, "Show when solo", function(on) act.setShowWhenSolo(on) end)
@@ -2613,24 +2438,36 @@ local function buildConfig()
 
 	-- Scale + background opacity sliders (two columns, both frames) ----------
 	local sliderY = togY - 84
-	p.scaleSlider = ui.cfgSlider(p, "FWH_CfgScale", 0.5, 2.0, 0.1, function(v) act.setScale(v, true) end)
+	p.scaleSlider = LibWidgets.NewSlider(p, {
+		name = "FWH_CfgScale", min = 0.5, max = 2.0, step = 0.1,
+		onChange = function(v) act.setScale(v, true) end,
+		format = function(v) return string.format("Scale  %.1f", v) end,
+	})
 	p.scaleSlider:SetPoint("TOPLEFT", p, "TOPLEFT", SCOL1, sliderY)
-	p.opacitySlider = ui.cfgSlider(p, "FWH_CfgOpacity", 0, 1, 0.05, function(v) act.setBgOpacity(v) end)
+	p.opacitySlider = LibWidgets.NewSlider(p, {
+		name = "FWH_CfgOpacity", min = 0, max = 1, step = 0.05,
+		onChange = function(v) act.setBgOpacity(v) end,
+		format = function(v) return string.format("Background opacity  %d%%", math.floor(v * 100 + 0.5)) end,
+	})
 	p.opacitySlider:SetPoint("TOPLEFT", p, "TOPLEFT", SCOL2, sliderY)
 
 	-- Low-duration threshold (0 = off): a ward below this many seconds turns orange and
 	-- becomes a WardNext priority. Its own row beneath scale/opacity.
 	local lowDurY = sliderY - 44
-	p.lowDurSlider = ui.cfgSlider(p, "FWH_CfgLowDur", 0, 300, 5, function(v) act.setLowDuration(v) end)
+	p.lowDurSlider = LibWidgets.NewSlider(p, {
+		name = "FWH_CfgLowDur", min = 0, max = 300, step = 5,
+		onChange = function(v) act.setLowDuration(v) end,
+		format = function(v)
+			return v > 0 and string.format("Low ward threshold  %ds", v) or "Low ward threshold  off"
+		end,
+	})
 	p.lowDurSlider:SetPoint("TOPLEFT", p, "TOPLEFT", SCOL1, lowDurY)
 
 	-- Notifications ---------------------------------------------------------
 	local notifyY = lowDurY - 44
 	local notifyHdr = ui.cfgHeader(p, "Notifications", 16, notifyY)
-	local testBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
-	testBtn:SetWidth(50); testBtn:SetHeight(20); testBtn:SetText("Test")
+	local testBtn = LibWidgets.NewButton(p, { text = "Test", width = 50, height = 20, onClick = function() act.notifyTest() end })
 	testBtn:SetPoint("LEFT", notifyHdr, "RIGHT", 10, -1)
-	testBtn:SetScript("OnClick", function() act.notifyTest() end)
 
 	-- Row 1: gains + losses. Row 2: "include untracked" (modifies both of the above,
 	-- hence indented under them). Row 3: the CD-ready pair.
@@ -2652,9 +2489,17 @@ local function buildConfig()
 
 	-- Fade + font size sliders (two columns) --------------------------------
 	local notifySliderY = notifyY - 120
-	p.notifyDurSlider = ui.cfgSlider(p, "FWH_CfgFade", 1, 10, 1, function(v) act.setNotifyDuration(v) end)
+	p.notifyDurSlider = LibWidgets.NewSlider(p, {
+		name = "FWH_CfgFade", min = 1, max = 10, step = 1,
+		onChange = function(v) act.setNotifyDuration(v) end,
+		format = function(v) return string.format("Fade after  %ds", v) end,
+	})
 	p.notifyDurSlider:SetPoint("TOPLEFT", p, "TOPLEFT", SCOL1, notifySliderY)
-	p.notifyFontSlider = ui.cfgSlider(p, "FWH_CfgFont", 8, 24, 1, function(v) act.setNotifyFontSize(v) end)
+	p.notifyFontSlider = LibWidgets.NewSlider(p, {
+		name = "FWH_CfgFont", min = 8, max = 24, step = 1,
+		onChange = function(v) act.setNotifyFontSize(v) end,
+		format = function(v) return string.format("Font size  %d", v) end,
+	})
 	p.notifyFontSlider:SetPoint("TOPLEFT", p, "TOPLEFT", SCOL2, notifySliderY)
 
 	-- Frame position --------------------------------------------------------
@@ -2664,9 +2509,7 @@ local function buildConfig()
 	p.watchPos  = ui.cfgPosRow(p, function() return FearWardHelper_Watch end)
 	p.notifyPos = ui.cfgPosRow(p, function() return FearWardHelper_Notify end)
 
-	local resetBtn = CreateFrame("Button", nil, p, "UIPanelButtonTemplate")
-	resetBtn:SetWidth(120); resetBtn:SetHeight(22); resetBtn:SetText("Reset positions")
-	resetBtn:SetScript("OnClick", function() act.resetLayout() end)
+	local resetBtn = LibWidgets.NewButton(p, { text = "Reset positions", width = 120, height = 22, onClick = function() act.resetLayout() end })
 	p.resetBtn = resetBtn
 
 	-- Stack the position rows from posTop. In merged mode the Target row is hidden

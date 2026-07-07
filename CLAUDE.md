@@ -437,15 +437,17 @@ to rotate shown → hidden → off, the name greying/tagging to match (`(hidden)
 `(off)` grey, else class-coloured, `(away)` if absent)), an add box, five checkboxes
 (single combined frame / lock / show-when-solo / "Hide addon" = `hidden` (the master
 hide toggle, routed through `setHidden`) / "Allow Ward untracked" =
-`wardNextSweep`), and **five sliders** (`cfgSlider`, an `OptionsSliderTemplate`
-whose `$parentText` carries the live value): **scale** (0.5–2.0, driving `setScale`
+`wardNextSweep`), and **five sliders** (`LibWidgets.NewSlider`, an
+`OptionsSliderTemplate` whose `$parentText` carries the live value via each
+slider's own `format(v)` spec field): **scale** (0.5–2.0, driving `setScale`
 with a `silent` arg so dragging doesn't spam chat), **background opacity** (0–1,
 `setBgOpacity`), **low-ward warning** (0–120s, step 5, `setLowDuration` — its own row
 under scale/opacity; `0` = off, see "Low-duration warning"), **fade duration** (1–10s,
-`setNotifyDuration`) and **font size** (8–24, `setNotifyFontSize`). All slider value writes are wrapped in one
-`configPanel.settingSlider` guard so a `refreshConfig` write doesn't echo back
-through `OnValueChanged`. A **Notifications** block (its `cfgHeader` carries the
-**Test** button to its right, which pushes sample lines via `notifyTest`) holds seven
+`setNotifyDuration`) and **font size** (8–24, `setNotifyFontSize`). Each slider guards
+its own `.setValue(v)` internally, so `refreshConfig` just calls it to resync from the
+DB without a panel-level flag or echoing back through `onChange`. A **Notifications**
+block (its `cfgHeader` carries the **Test** button — a `LibWidgets.NewButton` — to its
+right, which pushes sample lines via `notifyTest`) holds seven
 checkboxes — announce casts / announce ward loss, then include untracked players
 (indented under them, since it modifies both gains and losses) beside announce failed
 casts (`notifyCastFail`), then announce CD ready / announce group CD ready, then announce
@@ -457,28 +459,43 @@ a chat line; the panel deliberately doesn't reference it.)
 
 **Upvalue budget.** Lua 5.0 caps a function at **32 upvalues** (every chunk-level local
 a nested handler references counts as one for the enclosing `buildConfig`), and the panel
-was right at the edge. To stay clear, the ~19 widget factories + setters `buildConfig`
-closes over are **bundled into two tables built just above it** — `ui` (the `cfg*`
-factories) and `act` (the setters) — so the body reaches them as `ui.cfgCheck` /
-`act.setMerged`, costing **one upvalue per table** instead of one per function. The
-roster tables that are *reassigned* wholesale each `rebuildRoster` (`presentLower`,
-`classByName`) must stay **direct** upvalues so the closure sees the new value — they're
-deliberately not bundled; `watchState` / `classColor` stay direct too (cheap). So adding
-a new widget/setter: put the function in `ui`/`act` (or reuse `setNotifyFlag` for a plain
-boolean) rather than referencing a fresh chunk-level local from inside `buildConfig`.
+was right at the edge. To stay clear, the local widget factories + setters `buildConfig`
+closes over are **bundled into two tables built just above it** — `ui` (the remaining
+`cfg*` factories: `cfgHeader` / `cfgCheck` / `cfgPosRow`) and `act` (the
+setters) — so the body reaches them as `ui.cfgCheck` / `act.setMerged`, costing **one
+upvalue per table** instead of one per function. Buttons, text boxes, sliders and the
+anchor drop button are `LibWidgets.NewButton` / `NewTextBox` / `NewSlider` /
+`NewDropButton` calls instead — `LibWidgets` is a *global* (assigned via
+`LibStub:NewLibrary`, not a chunk-level `local`), so referencing it from inside
+`buildConfig` costs **no upvalue at all**, same as the `LibWidgets.NewListEditor` calls
+already used for the watch-list and class-priority editors. That's headroom freed, not
+spent, when a widget moves to the shared library. The roster tables that are
+*reassigned* wholesale each `rebuildRoster` (`presentLower`, `classByName`) must stay
+**direct** upvalues so the closure sees the new value — they're deliberately not
+bundled; `watchState` / `classColor` stay direct too (cheap). So adding a new
+widget/setter: reach for a `LibWidgets.New*` call first: if none fits, put the function
+in `ui`/`act` (or reuse `setNotifyFlag` for a plain boolean) rather than referencing a
+fresh chunk-level local from inside `buildConfig`.
 Finally per-frame **anchor** controls — each a single row
-(`cfgPosRow`): a name label, a custom popup "dropdown" (`cfgAnchorDropdown`: a button
-plus a list of the nine `ANCHOR_POINTS`) and X/Y edit boxes, one row each for the CD,
-Target and Notify frames. `p.layoutPos(merged)` (called from `refreshConfig`) stacks
-those rows, **hides the Target row and reclaims its space in merged mode**, then pins
-the Reset button below the last row and resizes the panel — so split mode grows the
-panel rather than leaving a gap. Category headers use `cfgHeader` (a slightly larger
-yellow font than the per-widget `cfgLabel`); the title is +2pt. Small widget
-factories (`cfgLabel` / `cfgHeader` / `cfgCheck` / `cfgEdit` / `cfgSlider` /
-`cfgAnchorDropdown` / `cfgPosRow`) keep it terse; all standard 1.12 templates
-(`UIPanelButtonTemplate` / `UICheckButtonTemplate` / `UIPanelCloseButton`). Edit boxes
-use a custom tooltip-style backdrop (`EDITBOX_BACKDROP`), not `InputBoxTemplate`
-(whose border textures render a black bar at small heights).
+(`cfgPosRow`): a name label, a `LibWidgets.NewDropButton` (values = the nine
+`ANCHOR_POINTS`, no labels needed since the point name **is** the label) and X/Y
+`LibWidgets.NewTextBox` boxes, one row each for the CD, Target and Notify frames.
+`p.layoutPos(merged)` (called from `refreshConfig`) stacks those rows, **hides the
+Target row and reclaims its space in merged mode**, then pins the Reset button below
+the last row and resizes the panel — so split mode grows the panel rather than leaving
+a gap. Category headers use `cfgHeader` (a slightly larger yellow font than the
+per-widget `cfgLabel`); the title is +2pt. The remaining small local factories
+(`cfgLabel` / `cfgHeader` / `cfgCheck` / `cfgPosRow`) keep it terse; standard 1.12
+templates (`UICheckButtonTemplate` / `UIPanelCloseButton`) back the checkbox/close-X,
+while buttons, edit boxes, sliders, the anchor picker and the watch-list's own add
+row are all `LibWidgets` widgets sharing one tooltip-style backdrop look (see
+[Libs/LibWidgets/CLAUDE.md](Libs/LibWidgets/CLAUDE.md)) instead of a
+per-addon `InputBoxTemplate`/`UIPanelButtonTemplate` mix. At most one anchor-picker
+popup is ever open at once (`LibWidgets.CloseAllMenus()`, closed by touching any
+other widget in the panel); `buildConfig` also wires the panel's own `OnMouseDown`
+(a blank-area click) and `OnHide` to it, since those are the one gap the library's
+own per-widget closing can't reach (see LibWidgets' CLAUDE.md for why there's no
+screen-covering click-catcher instead).
 
 **Class-priority popup** — a **Class priority** button beside the "Tracked players"
 header opens `FearWardHelper_ClassPriority` (`buildClassPriority`, built lazily), a small
